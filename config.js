@@ -1,2 +1,2 @@
-// Public configuration only. No passwords, tokens or private links belong here.
-export const API_BASE = ''; // Set after the approved backend deployment, e.g. https://svpaul-apps-api.ACCOUNT.workers.dev
+// Public API endpoint only. Private data is returned only to authenticated sessions.
+export const API_BASE='https://svpaulcar-apps-api.carlos-mercader-conesa.workers.dev';

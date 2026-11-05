@@ -88,7 +88,7 @@ async function refreshNotifications(){
   if(!pushConfig.pushEnabled){$('push-toggle').disabled=true;showMessage('push-message','Los avisos de Sustituciones estarán disponibles próximamente.');return;}
   const registration=await navigator.serviceWorker.ready;const sub=await registration.pushManager.getSubscription();
   $('push-toggle').textContent=sub?'🔕 Desactivar avisos':'🔔 Activar avisos';$('push-toggle').dataset.enabled=sub?'true':'false';$('push-toggle').setAttribute('aria-label',(sub?'Desactivar':'Activar')+' notificaciones push de Sustituciones');
-  showMessage('push-message',sub?'Recibirás únicamente actualizaciones de Sustituciones.':'Actívalas si quieres recibir actualizaciones de Sustituciones.');
+  showMessage('push-message',sub?(pushConfig.deliveryEnabled?'Recibirás únicamente actualizaciones de Sustituciones.':'Suscripción guardada. Pendiente de activar los envíos.'):'Actívalas si quieres recibir actualizaciones de Sustituciones.');
  }catch{showMessage('push-message','Los avisos de Sustituciones estarán disponibles próximamente.');$('push-toggle').disabled=true;}
 }
 function fromBase64(value){return Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-value.length%4)%4)),c=>c.charCodeAt(0));}
