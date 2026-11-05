@@ -5,7 +5,7 @@ installButton.addEventListener('click', async () => { if (installPrompt) { await
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 
 // The access token exists only in memory and is never put in localStorage or caches.
-import { API_BASE } from './config.js';
+import { API_BASE } from './config.js?v=9';
 let accessToken = '', expiryTimer, personalApps = [];
 const apiBase=API_BASE.replace(/\/$/,'');
 const $=id=>document.getElementById(id);
