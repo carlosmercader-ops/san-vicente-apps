@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "SVP Apps · San Vicente de Paúl",
-  "short_name": "SVP Apps",
+  "name": "SVPAUL APPS",
+  "short_name": "SVPAUL APPS",
   "lang": "es",
   "start_url": "./",
   "scope": "./",
@@ -10,7 +10,7 @@
   "theme_color": "#183c34",
   "icons": [
     {
-      "src": "general.png",
+      "src": "general-ios.png",
       "sizes": "1254x1254",
       "type": "image/png",
       "purpose": "any"
