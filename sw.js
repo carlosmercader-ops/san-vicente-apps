@@ -1,4 +1,4 @@
-const CACHE='svpaul-shell-v6';
+const CACHE='svpaul-shell-v7';
 const SHELL=['./','./index.html','./general-ios.png','./comedor.jpg','./base-datos.png','./justificantes.png','./sustituciones.png','./fichaje.png','./filmoteca.png','./parte-tic.png','./parte-mantenimiento.png','./app.js','./config.js','./manifest.webmanifest'];
 const urls=new Set(SHELL.map(path=>new URL(path,self.registration.scope).href));
 self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL)));self.skipWaiting();});
