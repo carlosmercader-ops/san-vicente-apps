@@ -1,13 +1,13 @@
 {
   "id": "./",
-  "name": "SVPAUL APPS",
-  "short_name": "SVPAUL APPS",
+  "name": "SVPAULCAR Apps",
+  "short_name": "SVPAULCAR Apps",
   "lang": "es",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f6f7f2",
-  "theme_color": "#183c34",
+  "background_color": "#f6f8fb",
+  "theme_color": "#004379",
   "icons": [
     {
       "src": "general-ios.png",
