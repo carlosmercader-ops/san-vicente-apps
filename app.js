@@ -21,7 +21,6 @@ function clearSession(){
  accessToken='';clearTimeout(expiryTimer);personalApps=[];$('private-list').replaceChildren();$('personal-section').hidden=true;$('login-form').reset();
 }
 $('open-personal').addEventListener('click',()=>{
- $('settings-menu').open=false;
  if(accessToken){$('personal-section').scrollIntoView({behavior:'smooth'});return;}
  showMessage('login-message','');$('login-dialog').showModal();$('personal-password').focus();
 });
@@ -51,36 +50,26 @@ function renderApps(){
 document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>b.closest('dialog').close()));
 $('login-dialog').addEventListener('close',()=>{$('login-form').reset();});
 
-let pushConfig;
+let pushConfig,deviceRegistered=false,pushRefresh=0;
+let currentPushTest='',receivedPushTests=new Set();
 function isIOS(){return /iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);}
-async function refreshNotifications(){
- if(!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window)){
-  $('push-toggle').disabled=true;showMessage('push-message',isIOS()?'En iPhone, añade esta app a la pantalla de inicio desde Safari y ábrela desde su icono (iOS 16.4 o posterior).':'Este navegador no permite notificaciones push.');return;
- }
- try{
-  pushConfig=await api('/config');
-  if(!pushConfig.pushEnabled){$('push-toggle').disabled=true;showMessage('push-message','Los avisos de Sustituciones estarán disponibles próximamente.');return;}
-  const registration=await navigator.serviceWorker.ready;const sub=await registration.pushManager.getSubscription();
-  $('push-toggle').textContent=sub?'Desactivar avisos':'Activar avisos';$('push-toggle').dataset.enabled=sub?'true':'false';$('push-toggle').setAttribute('aria-label',(sub?'Desactivar':'Activar')+' notificaciones push de Sustituciones');
-  showMessage('push-message',sub?(pushConfig.deliveryEnabled?'🔔 Avisos activados en este dispositivo.':'⏳ Dispositivo suscrito. Los envíos todavía están pendientes de activación.'):'🔕 Avisos desactivados en este dispositivo.');
- }catch{showMessage('push-message','Los avisos de Sustituciones estarán disponibles próximamente.');$('push-toggle').disabled=true;}
-}
 function fromBase64(value){return Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-value.length%4)%4)),c=>c.charCodeAt(0));}
-$('push-toggle').addEventListener('click',async()=>{
- const button=$('push-toggle');button.disabled=true;
- try{
-  const registration=await navigator.serviceWorker.ready;let sub=await registration.pushManager.getSubscription();
-  if(sub){
-   // Delete server registration first; a failed delete can be retried without losing its proof.
-   await api('/subscriptions',{method:'DELETE',data:sub.toJSON()});await sub.unsubscribe();
-  }else{
-   if(isIOS()&&!window.matchMedia('(display-mode: standalone)').matches&&!navigator.standalone)throw new Error('Abre SVPAULCAR Apps desde su icono de la pantalla de inicio.');
-   if(await Notification.requestPermission()!=='granted')throw new Error('No se ha concedido permiso. Puedes cambiarlo en los ajustes del navegador.');
-   sub=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:fromBase64(pushConfig.publicKey)});
-   try{await api('/subscriptions',{method:'POST',data:sub.toJSON()});}catch(err){await sub.unsubscribe();throw err;}
-  }
-  await refreshNotifications();
- }catch(err){showMessage('push-message',err.message);}finally{button.disabled=false;}
-});
+function samePushKey(sub,key){if(!sub.options?.applicationServerKey)return true;const stored=new Uint8Array(sub.options.applicationServerKey),expected=fromBase64(key);return stored.length===expected.length&&stored.every((v,i)=>v===expected[i]);}
+async function supportsPushTest(registration){if(!registration.active)return false;return new Promise(resolve=>{const channel=new MessageChannel(),timer=setTimeout(()=>resolve(false),1800);channel.port1.onmessage=e=>{clearTimeout(timer);resolve(e.data?.supportsPushTest===true);};registration.active.postMessage({type:'push-self-test-capability'},[channel.port2]);});}
+async function refreshNotifications(){
+ const generation=++pushRefresh;
+ $('push-test').disabled=true;
+ if(!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window)){$('push-toggle').disabled=true;showMessage('push-message',isIOS()?'En iPhone, añade esta app a la pantalla de inicio desde Safari y ábrela desde su icono (iOS 16.4 o posterior).':'Este navegador no permite notificaciones push.');return;}
+ try{pushConfig=await api('/config');if(!pushConfig.pushEnabled){$('push-toggle').disabled=true;showMessage('push-message','El registro de avisos está desactivado en el servidor.');return;}
+ const registration=await navigator.serviceWorker.ready,sub=await registration.pushManager.getSubscription();let registered=false;if(sub&&samePushKey(sub,pushConfig.publicKey)){const state=await api('/subscriptions/status',{method:'POST',data:sub.toJSON()});registered=state.registered;}
+ if(generation!==pushRefresh)return;deviceRegistered=registered;$('push-toggle').disabled=false;$('push-toggle').textContent=registered?'Desactivar avisos':sub?'Reactivar avisos':'Activar avisos';$('push-toggle').dataset.enabled=String(registered);$('push-toggle').setAttribute('aria-label',(registered?'Desactivar':'Activar')+' notificaciones push de Sustituciones');const testReady=await supportsPushTest(registration);if(generation!==pushRefresh)return;$('push-test').disabled=!registered||!pushConfig.deliveryEnabled||!testReady;if(!testReady){showMessage('push-test-message','Actualizando los avisos. Recarga la app en unos segundos para probarlos.');registration.update().catch(()=>{});}else if(!currentPushTest)showMessage('push-test-message','La prueba se envía solo a este dispositivo.');
+ showMessage('push-message',registered?(pushConfig.deliveryEnabled?'🔔 Avisos activados y dispositivo registrado.':'⏳ Dispositivo registrado. Los envíos están desactivados en el servidor.'):sub?'Este dispositivo necesita reactivar sus avisos.':'🔕 Avisos desactivados en este dispositivo.');
+ }catch{showMessage('push-message','No se ha podido comprobar el registro de avisos. Vuelve a intentarlo recargando la app.');$('push-toggle').disabled=true;}
+}
+$('push-toggle').addEventListener('click',async()=>{const button=$('push-toggle');button.disabled=true;$('push-test').disabled=true;try{const registration=await navigator.serviceWorker.ready;let sub=await registration.pushManager.getSubscription();if(sub&&deviceRegistered){await api('/subscriptions',{method:'DELETE',data:sub.toJSON()});await sub.unsubscribe();}else{if(isIOS()&&!window.matchMedia('(display-mode: standalone)').matches&&!navigator.standalone)throw Error('Abre SVPAULCAR Apps desde su icono de la pantalla de inicio.');if(await Notification.requestPermission()!=='granted')throw Error('No se ha concedido permiso. Puedes cambiarlo en los ajustes del navegador.');if(sub&&!samePushKey(sub,pushConfig.publicKey)){await api('/subscriptions',{method:'DELETE',data:sub.toJSON()});await sub.unsubscribe();sub=null;}if(!sub)sub=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:fromBase64(pushConfig.publicKey)});try{await api('/subscriptions',{method:'POST',data:sub.toJSON()});}catch(err){await sub.unsubscribe();throw err;}}
+ await refreshNotifications();}catch(err){showMessage('push-message',err.message);button.disabled=false;}});
+if('serviceWorker'in navigator)navigator.serviceWorker.addEventListener('controllerchange',()=>refreshNotifications());
+if('serviceWorker'in navigator)navigator.serviceWorker.addEventListener('message',event=>{const m=event.data;if(m?.type!=='push-test-received'||typeof m.testId!=='string')return;receivedPushTests.add(m.testId);if(m.testId===currentPushTest)showMessage('push-test-message','✅ Prueba recibida correctamente en este dispositivo. Si no aparece el aviso, revisa los ajustes de notificaciones del sistema.');});
+$('push-test').addEventListener('click',async()=>{const button=$('push-test');button.disabled=true;showMessage('push-test-message','Enviando una prueba real solo a este dispositivo…');try{const registration=await navigator.serviceWorker.ready;const sub=await registration.pushManager.getSubscription();if(!sub)throw Error('Activa primero los avisos de este dispositivo.');const result=await api('/subscriptions/test',{method:'POST',data:sub.toJSON()});currentPushTest=result.testId;showMessage('push-test-message',receivedPushTests.has(currentPushTest)?'✅ Prueba recibida correctamente en este dispositivo.':'Prueba aceptada por el servicio. Esperando que llegue a este dispositivo…');const id=currentPushTest;setTimeout(()=>{if(currentPushTest===id&&!receivedPushTests.has(id))showMessage('push-test-message','El servicio aceptó la prueba, pero aún no se confirma la recepción. Comprueba los permisos del navegador y del sistema y vuelve a probar.');},20000);}catch(err){showMessage('push-test-message',err.message);}finally{button.disabled=!deviceRegistered||!pushConfig?.deliveryEnabled;}});
 function showSubstitutions(){if(location.hash==='#sustituciones'){$('sustituciones').scrollIntoView({behavior:'smooth',block:'center'});$('sustituciones').focus();}}
 window.addEventListener('hashchange',showSubstitutions);showSubstitutions();refreshNotifications();
