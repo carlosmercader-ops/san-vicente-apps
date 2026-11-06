@@ -1,311 +1,63 @@
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/uint8array-extras/index.js
-var objectToString = Object.prototype.toString;
-var uint8ArrayStringified = "[object Uint8Array]";
-var arrayBufferStringified = "[object ArrayBuffer]";
-function isType(value, typeConstructor, typeStringified) {
-  if (!value) {
-    return false;
-  }
-  if (value.constructor === typeConstructor) {
-    return true;
-  }
-  return objectToString.call(value) === typeStringified;
-}
-function isUint8Array(value) {
-  return isType(value, Uint8Array, uint8ArrayStringified);
-}
-function isArrayBuffer(value) {
-  return isType(value, ArrayBuffer, arrayBufferStringified);
-}
-function isUint8ArrayOrArrayBuffer(value) {
-  return isUint8Array(value) || isArrayBuffer(value);
-}
-function toUint8ArrayIfArrayBuffer(value) {
-  return isArrayBuffer(value) ? new Uint8Array(value) : value;
-}
-function assertUint8ArrayOrArrayBuffer(value) {
-  if (!isUint8ArrayOrArrayBuffer(value)) {
-    throw new TypeError(`Expected \`Uint8Array\` or \`ArrayBuffer\`, got \`${typeof value}\``);
-  }
-}
-function toUint8Array(value) {
-  if (value instanceof ArrayBuffer) {
-    return new Uint8Array(value);
-  }
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  }
-  throw new TypeError(`Unsupported value, got \`${typeof value}\`.`);
-}
-function concatUint8Arrays(arrays, totalLength) {
-  if (arrays.length === 0) {
-    return new Uint8Array(0);
-  }
-  totalLength ??= arrays.reduce((accumulator, currentValue) => accumulator + currentValue.byteLength, 0);
-  const returnValue = new Uint8Array(totalLength);
+// src/push-crypto.js
+var enc = new TextEncoder();
+var b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+var un64 = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
+var concat = (...a) => {
+  const out = new Uint8Array(a.reduce((n, b) => n + b.length, 0));
   let offset = 0;
-  for (let array of arrays) {
-    assertUint8ArrayOrArrayBuffer(array);
-    array = toUint8ArrayIfArrayBuffer(array);
-    returnValue.set(array, offset);
-    offset += array.length;
+  for (const b of a) {
+    out.set(b, offset);
+    offset += b.length;
   }
-  return returnValue;
-}
-var cachedDecoders = {
-  utf8: new globalThis.TextDecoder("utf8")
+  return out;
 };
-function assertString(value) {
-  if (typeof value !== "string") {
-    throw new TypeError(`Expected \`string\`, got \`${typeof value}\``);
-  }
+async function hmac(key, data) {
+  const k = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", k, data));
 }
-var cachedEncoder = new globalThis.TextEncoder();
-function stringToUint8Array(string) {
-  assertString(string);
-  return cachedEncoder.encode(string);
+async function expand(key, info, length) {
+  return (await hmac(key, concat(info, new Uint8Array([1])))).slice(0, length);
 }
-function base64ToBase64Url(base64) {
-  return base64.replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+async function cifrar(subscription, payload) {
+  const ua = un64(subscription.keys.p256dh), auth = un64(subscription.keys.auth);
+  if (ua.length !== 65 || auth.length !== 16) throw Error("Claves de suscripci\xF3n no v\xE1lidas");
+  const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const server = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+  const client = await crypto.subtle.importKey("raw", ua, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const secret = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: client }, pair.privateKey, 256));
+  const ikm = await expand(await hmac(auth, secret), concat(enc.encode("WebPush: info\0"), ua, server), 32);
+  const salt = crypto.getRandomValues(new Uint8Array(16)), prk = await hmac(salt, ikm);
+  const key = await expand(prk, enc.encode("Content-Encoding: aes128gcm\0"), 16), nonce = await expand(prk, enc.encode("Content-Encoding: nonce\0"), 12);
+  const aes = await crypto.subtle.importKey("raw", key, "AES-GCM", false, ["encrypt"]);
+  const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, aes, concat(enc.encode(JSON.stringify(payload)), new Uint8Array([2]))));
+  const header = new Uint8Array(21);
+  header.set(salt);
+  new DataView(header.buffer).setUint32(16, 4096);
+  header[20] = 65;
+  return concat(header, server, cipher);
 }
-function base64UrlToBase64(base64url) {
-  const base64 = base64url.replaceAll("-", "+").replaceAll("_", "/");
-  const padding = (4 - base64.length % 4) % 4;
-  return base64 + "=".repeat(padding);
+async function vapid(endpoint, env) {
+  const header = b64(enc.encode(JSON.stringify({ typ: "JWT", alg: "ES256" }))), body2 = b64(enc.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1e3) + 3600, sub: env.VAPID_SUBJECT })));
+  const text = header + "." + body2;
+  const key = await crypto.subtle.importKey("jwk", JSON.parse(env.VAPID_PRIVATE_JWK), { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, enc.encode(text));
+  return text + "." + b64(signature);
 }
-var MAX_BLOCK_SIZE = 65535;
-function uint8ArrayToBase64(array, { urlSafe = false } = {}) {
-  assertUint8ArrayOrArrayBuffer(array);
-  array = toUint8ArrayIfArrayBuffer(array);
-  let base64 = "";
-  for (let index = 0; index < array.length; index += MAX_BLOCK_SIZE) {
-    const chunk = array.subarray(index, index + MAX_BLOCK_SIZE);
-    base64 += globalThis.btoa(String.fromCodePoint.apply(void 0, chunk));
-  }
-  return urlSafe ? base64ToBase64Url(base64) : base64;
-}
-function base64ToUint8Array(base64String) {
-  assertString(base64String);
-  return Uint8Array.from(globalThis.atob(base64UrlToBase64(base64String)), (x) => x.codePointAt(0));
-}
-var byteToHexLookupTable = Array.from({ length: 256 }, (_, index) => index.toString(16).padStart(2, "0"));
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/utils.js
-function encodeRecordSize(size) {
-  const bytes = new Uint8Array(4);
-  new DataView(bytes.buffer).setUint32(0, size);
-  return bytes;
-}
-function invariant(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/client-keys.js
-async function deriveClientKeys(sub) {
-  const bytes = base64ToUint8Array(sub.keys.p256dh);
-  const authSecretBytes = base64ToUint8Array(sub.keys.auth);
-  invariant(bytes.byteLength === 65 && bytes[0] === 4, "Subscription p256dh is not an uncompressed P-256 point");
-  invariant(authSecretBytes.byteLength === 16, "Subscription auth secret is not 16 bytes");
-  return {
-    publicKeyBytes: bytes,
-    publicKey: await crypto.subtle.importKey("raw", bytes, {
-      name: "ECDH",
-      namedCurve: "P-256"
-    }, false, []),
-    authSecretBytes
-  };
-}
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/hkdf.js
-function createHMAC(data) {
-  const keyPromise = crypto.subtle.importKey("raw", data, {
-    name: "HMAC",
-    hash: "SHA-256"
-  }, false, ["sign"]);
-  return {
-    hash: async (input) => {
-      const k = await keyPromise;
-      return crypto.subtle.sign("HMAC", k, input);
-    }
-  };
-}
-async function hkdf(salt, ikm) {
-  const prkhPromise = createHMAC(salt).hash(ikm).then((prk) => createHMAC(prk));
-  return {
-    extract: async (info, len) => {
-      const prkh = await prkhPromise;
-      const blocks = await Array.from({ length: Math.ceil(len / 32) }, (_, i) => i).reduce(async (acc, i) => {
-        const previous = await acc;
-        const hash2 = await prkh.hash(new Uint8Array([...previous.at(-1) ?? [], ...info, i + 1]));
-        return [...previous, new Uint8Array(hash2)];
-      }, Promise.resolve([]));
-      return concatUint8Arrays(blocks).slice(0, len);
-    }
-  };
-}
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/info.js
-function createKeyInfo(clientPublic, serverPublic) {
-  return new Uint8Array([
-    ...stringToUint8Array("WebPush: info\0"),
-    ...clientPublic,
-    ...serverPublic
-  ]);
-}
-function createInfo(type) {
-  return stringToUint8Array(`Content-Encoding: ${type}\0`);
-}
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/local-keys.js
-async function generateLocalKeys() {
-  const keyPair = await crypto.subtle.generateKey({
-    name: "ECDH",
-    namedCurve: "P-256"
-  }, false, ["deriveBits"]);
-  return {
-    privateKey: keyPair.privateKey,
-    publicKeyBytes: new Uint8Array(await crypto.subtle.exportKey("raw", keyPair.publicKey))
-  };
-}
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/salt.js
-async function getSalt() {
-  return crypto.getRandomValues(new Uint8Array(16));
-}
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/encrypt.js
-var recordSize = 4096;
-var headerSize = 21 + 65;
-var maxPlaintextSize = recordSize - headerSize - 17;
-async function encryptNotification(subscription, plaintext, options = {}) {
-  invariant(plaintext.byteLength <= maxPlaintextSize, `Payload is ${plaintext.byteLength} bytes, the maximum is ${maxPlaintextSize}`);
-  const clientKeys = await deriveClientKeys(subscription);
-  const salt = await getSalt();
-  const localKeys = await generateLocalKeys();
-  const sharedSecret = await crypto.subtle.deriveBits({
-    name: "ECDH",
-    public: clientKeys.publicKey
-  }, localKeys.privateKey, 256);
-  const keyInfo = createKeyInfo(clientKeys.publicKeyBytes, localKeys.publicKeyBytes);
-  const cekInfo = createInfo("aes128gcm");
-  const nonceInfo = createInfo("nonce");
-  const ikmHkdf = await hkdf(clientKeys.authSecretBytes, sharedSecret);
-  const ikm = await ikmHkdf.extract(keyInfo, 32);
-  const messageHkdf = await hkdf(salt, ikm);
-  const cekBytes = await messageHkdf.extract(cekInfo, 16);
-  const nonceBytes = await messageHkdf.extract(nonceInfo, 12);
-  const cekCryptoKey = await crypto.subtle.importKey("raw", cekBytes, {
-    name: "AES-GCM",
-    length: 128
-  }, false, ["encrypt"]);
-  const padTo = options.pad ?? true ? maxPlaintextSize : plaintext.byteLength;
-  const padded = new Uint8Array(padTo + 1);
-  padded.set(plaintext);
-  padded[plaintext.byteLength] = 2;
-  const encrypted = await crypto.subtle.encrypt({
-    name: "AES-GCM",
-    iv: nonceBytes
-  }, cekCryptoKey, padded);
-  return new Uint8Array([
-    ...salt,
-    ...encodeRecordSize(recordSize),
-    localKeys.publicKeyBytes.byteLength,
-    ...localKeys.publicKeyBytes,
-    ...new Uint8Array(encrypted)
-  ]);
-}
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/base64.js
-function encodeBase64Url(value) {
-  return uint8ArrayToBase64(toUint8Array(value), { urlSafe: true });
-}
-function objectToBase64Url(obj) {
-  return encodeBase64Url(stringToUint8Array(JSON.stringify(obj)));
-}
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/jwt.js
-async function sign(payload, key) {
-  const headerStr = objectToBase64Url({
-    typ: "JWT",
-    alg: "ES256"
-  });
-  const payloadStr = objectToBase64Url({
-    iat: Math.floor(Date.now() / 1e3),
-    ...payload
-  });
-  const dataStr = `${headerStr}.${payloadStr}`;
-  const signature = await crypto.subtle.sign({
-    name: "ECDSA",
-    hash: "SHA-256"
-  }, key, stringToUint8Array(dataStr));
-  return `${dataStr}.${encodeBase64Url(signature)}`;
-}
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/vapid.js
-async function vapidHeaders(subscription, vapid) {
-  invariant(vapid.subject, "Vapid subject is empty");
-  invariant(vapid.privateKey, "Vapid private key is empty");
-  invariant(vapid.publicKey, "Vapid public key is empty");
-  const endpoint = new URL(subscription.endpoint);
-  invariant(endpoint.protocol === "https:", `Subscription endpoint is not https: ${endpoint.protocol}`);
-  const vapidPublicKeyBytes = base64ToUint8Array(vapid.publicKey);
-  const publicKey = await crypto.subtle.importKey("jwk", {
-    kty: "EC",
-    crv: "P-256",
-    x: encodeBase64Url(vapidPublicKeyBytes.slice(1, 33)),
-    y: encodeBase64Url(vapidPublicKeyBytes.slice(33, 65)),
-    d: vapid.privateKey
-  }, {
-    name: "ECDSA",
-    namedCurve: "P-256"
-  }, false, ["sign"]);
-  const jwt = await sign({
-    aud: endpoint.origin,
-    exp: Math.floor(Date.now() / 1e3) + 12 * 60 * 60,
-    sub: vapid.subject
-  }, publicKey);
-  return {
-    headers: {
-      authorization: `vapid t=${jwt}, k=${vapid.publicKey}`
-    }
-  };
-}
-
-// ../../../../2026-11-05/va/outputs/san-vicente-apps/backend/node_modules/@block65/webcrypto-web-push/dist/lib/payload.js
-async function buildPushPayload(message, subscription, vapid) {
-  const { headers } = await vapidHeaders(subscription, vapid);
-  const body2 = await encryptNotification(subscription, stringToUint8Array(
-    // if its a primitive, convert to string, otherwise stringify
-    typeof message.data === "string" || typeof message.data === "number" ? message.data.toString() : JSON.stringify(message.data)
-  ));
-  return {
-    headers: {
-      ...headers,
-      ttl: (message.options?.ttl || 60).toString(),
-      ...message.options?.urgency && {
-        urgency: message.options.urgency
-      },
-      ...message.options?.topic && {
-        topic: message.options.topic
-      },
-      "content-encoding": "aes128gcm",
-      "content-length": body2.byteLength.toString(),
-      "content-type": "application/octet-stream"
-    },
-    method: "post",
-    body: body2
-  };
+async function buildPushPayload(message, subscription, keys) {
+  const publicBytes = un64(keys.publicKey);
+  const privateJwk = { kty: "EC", crv: "P-256", x: b64(publicBytes.slice(1, 33)), y: b64(publicBytes.slice(33, 65)), d: keys.privateKey };
+  const env = { VAPID_PRIVATE_JWK: JSON.stringify(privateJwk), VAPID_PUBLIC_KEY: keys.publicKey, VAPID_SUBJECT: keys.subject };
+  const data = typeof message.data === "string" ? JSON.parse(message.data) : message.data;
+  return { method: "POST", headers: { "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", TTL: String(message.options?.ttl || 60), ...message.options?.urgency ? { Urgency: message.options.urgency } : {}, Authorization: "vapid t=" + await vapid(subscription.endpoint, env) + ", k=" + keys.publicKey }, body: await cifrar(subscription, data) };
 }
 
 // src/security.js
-var enc = new TextEncoder();
-var b64 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+var enc2 = new TextEncoder();
+var b642 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 var unb64 = (value) => Uint8Array.from(atob(value.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - value.length % 4) % 4)), (c) => c.charCodeAt(0));
-var randomToken = () => b64(crypto.getRandomValues(new Uint8Array(32)));
+var randomToken = () => b642(crypto.getRandomValues(new Uint8Array(32)));
 async function hash(value) {
-  return b64(await crypto.subtle.digest("SHA-256", enc.encode(value)));
+  return b642(await crypto.subtle.digest("SHA-256", enc2.encode(value)));
 }
 async function equal(a, b) {
   const aa = await hash(a), bb = await hash(b);
@@ -314,10 +66,10 @@ async function equal(a, b) {
   return diff === 0;
 }
 async function passwordHash(password, salt, iterations = 1e5, pepper = "") {
-  const secret = await crypto.subtle.importKey("raw", enc.encode(pepper), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const prepared = await crypto.subtle.sign("HMAC", secret, enc.encode(password));
+  const secret = await crypto.subtle.importKey("raw", enc2.encode(pepper), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const prepared = await crypto.subtle.sign("HMAC", secret, enc2.encode(password));
   const key = await crypto.subtle.importKey("raw", prepared, "PBKDF2", false, ["deriveBits"]);
-  return b64(await crypto.subtle.deriveBits({ name: "PBKDF2", salt: unb64(salt), iterations, hash: "SHA-256" }, key, 256));
+  return b642(await crypto.subtle.deriveBits({ name: "PBKDF2", salt: unb64(salt), iterations, hash: "SHA-256" }, key, 256));
 }
 async function verifyPassword(password, record, pepper) {
   if (typeof password !== "string" || password.length > 256 || !record || !pepper) return false;
@@ -436,12 +188,13 @@ async function route(req, env, ctx) {
     if (!stored || !await equal(stored.keys.auth, sub.keys.auth) || !await equal(stored.keys.p256dh, sub.keys.p256dh)) return json({ error: "Este dispositivo no est\xE1 registrado. Activa sus avisos antes de probar." }, 409);
     if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY || !env.VAPID_SUBJECT) return json({ error: "Falta configurar la firma del servicio de avisos." }, 503);
     const testId = crypto.randomUUID();
-    let status = 0;
+    let status = 0, stage = "preparar";
     try {
       const payload = await buildPushPayload({ data: JSON.stringify({ type: "sustituciones-test", testId }), options: { ttl: 120, urgency: "high" } }, sub, { subject: env.VAPID_SUBJECT, publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY });
+      stage = "conectar";
       status = (await fetch(sub.endpoint, { ...payload, redirect: "error", signal: AbortSignal.timeout(15e3) })).status;
-    } catch {
-      return json({ error: "No se ha podido preparar o conectar el aviso push de prueba. Comprueba la configuraci\xF3n del servicio." }, 502);
+    } catch (e) {
+      return json({ error: "No se ha podido " + stage + " el aviso push de prueba (" + String(e.name || "Error").replace(/[^A-Za-z]/g, "") + "). Comprueba la configuraci\xF3n del servicio.", stage }, 502);
     }
     if (status === 404 || status === 410) {
       await env.DB.prepare("DELETE FROM subscriptions WHERE id=?").bind(id).run();
