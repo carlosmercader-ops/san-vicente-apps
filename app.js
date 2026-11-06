@@ -18,8 +18,7 @@ async function api(path,{method='GET',data,auth=false}={}) {
 }
 function showMessage(id,message){$(id).textContent=message;}
 function clearSession(){
- accessToken='';clearTimeout(expiryTimer);personalApps=[];$('private-list').replaceChildren();$('personal-section').hidden=true;$('personal-editor').reset();$('editor-id').value='';$('login-form').reset();
- if($('edit-dialog').open)$('edit-dialog').close();
+ accessToken='';clearTimeout(expiryTimer);personalApps=[];$('private-list').replaceChildren();$('personal-section').hidden=true;$('login-form').reset();
 }
 $('open-personal').addEventListener('click',()=>{
  $('settings-menu').open=false;
@@ -39,41 +38,16 @@ $('logout').addEventListener('click',async()=>{try{await api('/auth/logout',{met
 // Reloading deliberately signs out; BFCache must not resurrect private links.
 window.addEventListener('pagehide',()=>{if(accessToken)clearSession();});
 async function loadApps(){const result=await api('/apps',{auth:true});personalApps=result.apps;renderApps();}
-function control(label,callback){const b=document.createElement('button');b.type='button';b.className='secondary';b.textContent=label;b.addEventListener('click',callback);return b;}
 function renderApps(){
- const list=$('private-list');list.replaceChildren();showMessage('private-message',personalApps.length?'':'Aún no has añadido aplicaciones personales.');
- personalApps.forEach((app,index)=>{
+ const list=$('private-list');list.replaceChildren();showMessage('private-message',personalApps.length?'':'No hay aplicaciones personales disponibles.');
+ personalApps.forEach(app=>{
   const article=document.createElement('article');article.className='card private-card';
   const link=document.createElement('a');link.className='private-link';link.href=app.url;link.target='_blank';link.rel='noopener noreferrer';link.referrerPolicy='no-referrer';
   const img=document.createElement('img');img.className='app-icon';img.src=app.icon;img.alt='';
   const name=document.createElement('strong');name.className='app-name';name.textContent=app.name;link.append(img,name);
-  const actions=document.createElement('div');actions.className='private-actions';
-  actions.append(control('Editar',()=>editApp(app)),control('↑',()=>moveApp(index,-1)),control('↓',()=>moveApp(index,1)),control('Eliminar',()=>{
-   $('delete-name').textContent=app.name;$('delete-id').value=app.id;$('delete-dialog').showModal();
-  }));
-  actions.children[1].disabled=index===0;actions.children[1].setAttribute('aria-label','Subir '+app.name);
-  actions.children[2].disabled=index===personalApps.length-1;actions.children[2].setAttribute('aria-label','Bajar '+app.name);
-  article.append(link,actions);list.append(article);
+  article.append(link);list.append(article);
  });
 }
-async function moveApp(index,delta){
- const ids=personalApps.map(a=>a.id);[ids[index],ids[index+delta]]=[ids[index+delta],ids[index]];
- try{await api('/apps/order',{method:'PUT',data:{ids},auth:true});await loadApps();}catch(err){showMessage('private-message',err.message);}
-}
-function editApp(app){
- $('personal-editor').reset();$('editor-id').value=app?.id||'';$('editor-name').value=app?.name||'';$('editor-url').value=app?.url||'';$('editor-icon').value=app?.icon||'general-ios.png';showMessage('editor-message','');$('edit-dialog').showModal();$('editor-name').focus();
-}
-$('add-app').addEventListener('click',()=>editApp());
-$('personal-editor').addEventListener('submit',async e=>{
- e.preventDefault();const id=$('editor-id').value;const button=$('editor-save');button.disabled=true;
- try{
-  await api(id?'/apps/'+encodeURIComponent(id):'/apps',{method:id?'PUT':'POST',auth:true,data:{name:$('editor-name').value,url:$('editor-url').value,icon:$('editor-icon').value}});
-  await loadApps();$('edit-dialog').close();
- }catch(err){showMessage('editor-message',err.message);}finally{button.disabled=false;}
-});
-$('delete-form').addEventListener('submit',async e=>{
- e.preventDefault();try{await api('/apps/'+encodeURIComponent($('delete-id').value),{method:'DELETE',auth:true});await loadApps();$('delete-dialog').close();}catch(err){showMessage('delete-message',err.message);}
-});
 document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>b.closest('dialog').close()));
 $('login-dialog').addEventListener('close',()=>{$('login-form').reset();});
 
