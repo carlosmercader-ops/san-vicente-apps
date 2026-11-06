@@ -117,6 +117,14 @@ async function session(req, env) {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return false;
   return Boolean(await env.DB.prepare("SELECT expires FROM sessions WHERE token_hash=? AND expires>?").bind(await hash(token), now()).first());
 }
+async function sendWebPush(endpoint, payload) {
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15e3);
+  try {
+    return await fetch(endpoint, { ...payload, redirect: "manual", signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function route(req, env, ctx) {
   const url = new URL(req.url), path = url.pathname;
   if (path === "/health" && req.method === "GET") return json({ ok: true });
@@ -192,7 +200,7 @@ async function route(req, env, ctx) {
     try {
       const payload = await buildPushPayload({ data: JSON.stringify({ type: "sustituciones-test", testId }), options: { ttl: 120, urgency: "high" } }, sub, { subject: env.VAPID_SUBJECT, publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY });
       stage = "conectar";
-      status = (await fetch(sub.endpoint, { ...payload, redirect: "error", signal: AbortSignal.timeout(15e3) })).status;
+      status = (await sendWebPush(sub.endpoint, payload)).status;
     } catch (e) {
       return json({ error: "No se ha podido " + stage + " el aviso push de prueba (" + String(e.name || "Error").replace(/[^A-Za-z]/g, "") + "). Comprueba la configuraci\xF3n del servicio.", stage }, 502);
     }
@@ -235,7 +243,7 @@ async function deliver(env) {
       const subscription = cleanSubscription(JSON.parse(row.payload));
       const message = { data: JSON.stringify({ type: "sustituciones", eventId: row.event_id }), options: { ttl: 3600 } };
       const payload = await buildPushPayload(message, subscription, { subject: env.VAPID_SUBJECT, publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY });
-      status = (await fetch(subscription.endpoint, { ...payload, redirect: "error", signal: AbortSignal.timeout(15e3) })).status;
+      status = (await sendWebPush(subscription.endpoint, payload)).status;
     } catch {
     }
     if (status === 404 || status === 410) {
