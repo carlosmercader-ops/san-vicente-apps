@@ -1,0 +1,16 @@
+{
+  "name": "svpaulcar-apps-api",
+  "main": "portal-api.js",
+  "compatibility_date": "2026-11-05",
+  "account_id": "cdd91f774a9320d0e412fb88ae107850",
+  "observability": {"enabled": false},
+  "vars": {
+    "ALLOWED_ORIGIN": "https://carlosmercader-ops.github.io",
+    "APP_URL": "https://carlosmercader-ops.github.io/san-vicente-apps/",
+    "PUSH_ENABLED": "true",
+    "PUSH_SUBSCRIPTIONS_ENABLED": "true"
+  },
+  "d1_databases": [{"binding":"DB","database_name":"svpaulcar-private","database_id":"2fac6de4-7906-471a-a02b-e1ee8f139065"}],
+  "triggers": {"crons":["*/5 * * * *"]},
+  "preview_urls": false
+}
